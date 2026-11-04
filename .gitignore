@@ -1,0 +1,96 @@
+# =============================================================
+# GeoVision — .gitignore
+# =============================================================
+# This file tells Git which files and folders to IGNORE.
+# Ignored files are NOT uploaded to GitHub.
+#
+# WHY THIS MATTERS:
+#   - Keeps your SECRET API keys safe (they stay on your computer only)
+#   - Prevents huge image files from bloating your repository
+#   - Skips auto-generated files that clutter the project
+# =============================================================
+
+
+# --- SECRET FILES -------------------------------------------
+# Your real .env file with actual API keys. NEVER commit this.
+.env
+
+
+# --- DATA & LARGE FILES -------------------------------------
+# The data/ folder will hold images and datasets.
+# These are too large for GitHub and often have their own licenses.
+data/
+
+
+# --- PYTHON GENERATED FILES ---------------------------------
+# Python creates these automatically. They don't need to be tracked.
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.egg-info/
+dist/
+build/
+*.egg
+
+
+# --- VIRTUAL ENVIRONMENT ------------------------------------
+# Your local Python environment. Each person creates their own.
+venv/
+.venv/
+env/
+ENV/
+
+
+# --- JUPYTER / NOTEBOOK CHECKPOINTS ------------------------
+# Auto-saved notebook versions. Not needed in the repo.
+.ipynb_checkpoints/
+*.ipynb_checkpoints
+
+
+# --- IDE / EDITOR FILES -------------------------------------
+# VS Code workspace settings (optional to commit — your choice)
+.vscode/
+# JetBrains IDEs
+.idea/
+
+
+# --- OPERATING SYSTEM FILES ---------------------------------
+# Mac metadata files
+.DS_Store
+# Windows thumbnail cache
+Thumbs.db
+desktop.ini
+
+
+# --- MODEL WEIGHTS ------------------------------------------
+# Trained ML model files can be very large (gigabytes).
+# We'll use a separate storage solution for these.
+*.pt
+*.pth
+*.h5
+*.pkl
+*.ckpt
+*.safetensors
+
+
+# --- LOGS & TEMPORARY FILES ---------------------------------
+*.log
+*.tmp
+*.swp
+*.swo
+
+.venv/
+__pycache__/
+*.pyc
+data/raw/
+data/index/
+data/tmp/
+.env
+.venv/
+__pycache__/
+*.pyc
+data/raw/
+data/index/
+data/tmp/
+.env

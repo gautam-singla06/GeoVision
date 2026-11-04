@@ -1,0 +1,40 @@
+# ---------------------------------------------------------------
+# GeoVision — Python Dependencies
+# ---------------------------------------------------------------
+# Install with:
+#   pip install -r requirements.txt
+#
+# For CPU-only PyTorch (smaller download, no GPU needed):
+#   pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+#   pip install -r requirements.txt
+#
+# WHY EACH PACKAGE:
+#
+#   python-dotenv  → Loads API keys from .env file into the environment.
+#   requests       → HTTP client for calling the Wikimedia Commons API.
+#   Pillow         → Opens, resizes, and saves image files.
+#   tqdm           → Progress bars for download and indexing loops.
+#   numpy          → Fast array operations; stores the embedding matrix.
+#   torch          → PyTorch deep learning framework (CPU-only is fine).
+#   torchvision    → Pretrained ResNet-18 model + image transforms.
+#   streamlit      → Web UI framework — one command to run the app.
+#   pandas         → Used by Streamlit for displaying tables and maps.
+#
+# NOT included yet (later stages):
+#   faiss-cpu      → Faster nearest-neighbour search for very large DBs
+#   folium / plotly → Richer map visualisations (Stage 5)
+# ---------------------------------------------------------------
+
+python-dotenv>=1.0.0
+requests>=2.31.0
+Pillow>=10.0.0
+tqdm>=4.66.0
+numpy>=1.26.0
+streamlit>=1.35.0
+pandas>=2.1.0
+
+# PyTorch — install the CPU-only version first (see comment above).
+# These lines are intentionally left without version pins so the
+# CPU wheel from pytorch.org installs correctly.
+torch
+torchvision
