@@ -9,7 +9,11 @@ INDEX_DIR = DATA_DIR / "index"
 MAPILLARY_DIR = RAW_DIR / "mapillary"
 
 # Approximate downtown Pittsburgh bounds (west, south, east, north).
-REGION = {"name": "Downtown Pittsburgh", "bbox": [-80.025, 40.425, -79.975, 40.455]}
+# The centre/radius are retained from the project's existing region configuration
+# for Mapillary's working radius-based search; bounds remain useful for display.
+GEOSEARCH_RADIUS = 2500
+REGION = {"name": "Downtown Pittsburgh", "bbox": [-80.025, 40.425, -79.975, 40.455],
+          "lat": 40.4406, "lng": -79.9959, "radius": GEOSEARCH_RADIUS}
 DATASET_LIMIT = 20  # validation cap; configurable up to 100 via CLI
 MAX_DATASET_IMAGES = 100
 MAX_STORAGE_BYTES = 500 * 1024 * 1024
@@ -19,6 +23,5 @@ EMBEDDING_DIM = 512
 API_DELAY = 0.2
 
 # Backwards-compatible name for existing callers/tests.
-REGIONS = [{"name": "Downtown_Pittsburgh", "lat": 40.4406, "lon": -79.9959}]
+REGIONS = [{"name": "Downtown_Pittsburgh", "lat": REGION["lat"], "lon": REGION["lng"]}]
 NUM_IMAGES_PER_REGION = DATASET_LIMIT
-GEOSEARCH_RADIUS = 2500

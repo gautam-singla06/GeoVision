@@ -169,6 +169,26 @@ class TestImageEmbeddingShape(unittest.TestCase):
 
 
 class TestMapillaryCollection(unittest.TestCase):
+    def test_region_search_derives_center_and_radius_from_bbox(self):
+        from download_data import region_search
+        lat, lng, radius = region_search({"bbox": [-80.025, 40.425, -79.975, 40.455]})
+        self.assertAlmostEqual(lat, 40.44)
+        self.assertAlmostEqual(lng, -80.0)
+        self.assertGreater(radius, 2_500)
+
+    def test_candidate_query_uses_radius_not_bbox(self):
+        import download_data as collector
+        class Response:
+            def raise_for_status(self):
+                return None
+            def json(self):
+                return {"data": []}
+        with patch.object(collector.requests, "get", return_value=Response()) as request:
+            self.assertEqual(collector.fetch_candidates("test-token", 40.44, -80.0, 3_500, 1), [])
+        params = request.call_args.kwargs["params"]
+        self.assertEqual((params["lat"], params["lng"], params["radius"]), (40.44, -80.0, 3_500))
+        self.assertNotIn("bbox", params)
+
     def test_image_quality_filter(self):
         from download_data import quality_ok
         self.assertFalse(quality_ok(Image.new("RGB", (80, 80), "white")))

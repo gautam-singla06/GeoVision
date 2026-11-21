@@ -52,7 +52,7 @@ After reviewing the validation imagery, a collection can be expanded up to 100 i
 python src\download_data.py --limit 100
 ```
 
-To specify another bounding box, pass `--bbox west,south,east,north`. The default bounds cover downtown Pittsburgh. Resume by repeating the same command; previously saved IDs are skipped. Collection may return fewer images if the API provides too few candidates or filters reject them. No data is collected just by starting the app.
+The default search coordinates and radius come from `REGION` in `src/config.py`. To override them, pass `--lat`, `--lng`, and optionally `--radius` (metres), for example `python src/download_data.py --lat 40.4406 --lng -79.9959 --radius 2500`. Resume by repeating the same command; previously saved IDs are skipped. Collection may return fewer images if the API provides too few candidates or filters reject them. No data is collected just by starting the app.
 
 ## Build index and run
 

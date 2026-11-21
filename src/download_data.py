@@ -1,15 +1,15 @@
 """Opt-in Mapillary Graph API collector for public geotagged images.
 
-Run: python src/download_data.py [--limit 20] [--bbox west,south,east,north]
+Run: python src/download_data.py [--limit 20] [--lat LAT --lng LNG --radius METRES]
 No collection happens on import. Keep source attribution and Mapillary IDs.
 """
 import argparse
-import hashlib
 import io
 import json
 import os
 import sys
 import time
+from math import asin, cos, radians, sin, sqrt
 from pathlib import Path
 
 import requests
@@ -20,10 +20,11 @@ from config import API_DELAY, DATASET_LIMIT, MAPILLARY_DIR, MAX_DATASET_IMAGES, 
 
 API_URL = "https://graph.mapillary.com/images"
 FIELDS = "id,geometry,thumb_1024_url,captured_at,sequence,compass_angle,is_pano"
+REQUEST_TIMEOUT_SECONDS = 30
 
 
 def get_token():
-    """Read token from environment or root .env without ever displaying it."""
+    """Read the credential locally without ever displaying it."""
     token = os.getenv("MAPILLARY_CLIENT_TOKEN")
     env_file = Path(__file__).resolve().parent.parent / ".env"
     if not token and env_file.exists():
@@ -40,12 +41,33 @@ def get_token():
     return token
 
 
+def region_search(region: dict) -> tuple[float, float, int]:
+    """Derive search coordinates from REGION, falling back to its bounds."""
+    west, south, east, north = region["bbox"]
+    if not (-180 <= west < east <= 180 and -90 <= south < north <= 90):
+        raise ValueError("REGION bbox must be west,south,east,north within valid geographic bounds")
+    lat, lng = region.get("lat", (south + north) / 2), region.get("lng", (west + east) / 2)
+    if not (-90 <= lat <= 90 and -180 <= lng <= 180):
+        raise ValueError("REGION lat/lng must be valid geographic coordinates")
+
+    def distance_metres(lat_a, lng_a, lat_b, lng_b):
+        d_lat, d_lng = radians(lat_b - lat_a), radians(lng_b - lng_a)
+        a = sin(d_lat / 2) ** 2 + cos(radians(lat_a)) * cos(radians(lat_b)) * sin(d_lng / 2) ** 2
+        return 6_371_000 * 2 * asin(sqrt(a))
+
+    radius = region.get("radius")
+    if radius is None:
+        radius = max(distance_metres(lat, lng, corner_lat, corner_lng)
+                     for corner_lat in (south, north) for corner_lng in (west, east))
+    if not isinstance(radius, (int, float)) or radius <= 0:
+        raise ValueError("REGION radius must be a positive number of metres")
+    return lat, lng, max(1, int(radius + 0.999))
+
+
 def quality_ok(image: Image.Image) -> bool:
-    """Reject tiny, blank, or near-uniform thumbnails; cannot semantically identify portraits."""
     if image.width < 160 or image.height < 100:
         return False
-    gray = image.convert("L")
-    return ImageStat.Stat(gray).stddev[0] >= 12
+    return ImageStat.Stat(image.convert("L")).stddev[0] >= 12
 
 
 def dhash(image: Image.Image) -> int:
@@ -55,36 +77,52 @@ def dhash(image: Image.Image) -> int:
                for y in range(8) for x in range(8))
 
 
-def fetch_candidates(token: str, bbox: list[float], limit: int) -> list[dict]:
-    params = {"fields": FIELDS, "bbox": ",".join(map(str, bbox)), "limit": min(200, max(limit * 4, limit))}
+def fetch_candidates(token: str, lat: float, lng: float, radius: int, limit: int) -> list[dict]:
+    """Fetch candidates with the working lat/lng/radius Mapillary query."""
+    if not (-90 <= lat <= 90 and -180 <= lng <= 180 and radius > 0):
+        raise ValueError("search coordinates or radius are invalid")
+    params = {"fields": FIELDS, "lat": lat, "lng": lng, "radius": radius,
+              "limit": min(200, max(limit * 4, limit))}
     try:
-        response = requests.get(
-            API_URL,
-            params=params,
-            headers={"Authorization": f"OAuth {token}"},
-            timeout=30
-        )
+        response = requests.get(API_URL, params=params, headers={"Authorization": f"OAuth {token}"},
+                                timeout=REQUEST_TIMEOUT_SECONDS)
         response.raise_for_status()
-        data = response.json()
+        payload = response.json()
     except requests.RequestException as exc:
-        # Don't include exception text: request URLs can contain the access token.
-        raise RuntimeError(f"Mapillary request failed ({getattr(exc.response, 'status_code', 'network error')}). Check API access and try again.") from None
+        status = getattr(getattr(exc, "response", None), "status_code", "network error")
+        raise RuntimeError(f"Mapillary request failed ({status}). Check API access and try again.") from None
     except ValueError:
         raise RuntimeError("Mapillary returned an unreadable response.") from None
-    return data.get("data", [])
+    results = payload.get("data", []) if isinstance(payload, dict) else []
+    return results if isinstance(results, list) else []
 
 
-def download_dataset(limit: int = DATASET_LIMIT, bbox: list[float] | None = None) -> list[dict]:
+def download_dataset(limit: int = DATASET_LIMIT, lat: float | None = None,
+                     lng: float | None = None, radius: int | None = None) -> list[dict]:
     if not 1 <= limit <= MAX_DATASET_IMAGES:
         raise ValueError(f"limit must be between 1 and {MAX_DATASET_IMAGES}")
+    default_lat, default_lng, default_radius = region_search(REGION)
+    lat = default_lat if lat is None else lat
+    lng = default_lng if lng is None else lng
+    radius = default_radius if radius is None else radius
     token = get_token()
-    bbox = bbox or REGION["bbox"]
     MAPILLARY_DIR.mkdir(parents=True, exist_ok=True)
     meta_path = MAPILLARY_DIR / "metadata.json"
-    metadata = json.loads(meta_path.read_text(encoding="utf-8")) if meta_path.exists() else []
-    seen_ids = {str(r["image_id"]) for r in metadata}
-    seen_hashes = [int(r["dhash"], 16) for r in metadata if r.get("dhash")]
-    candidates = fetch_candidates(token, bbox, limit)
+    try:
+        metadata = json.loads(meta_path.read_text(encoding="utf-8")) if meta_path.exists() else []
+    except (OSError, ValueError):
+        raise RuntimeError("Existing Mapillary metadata is unreadable; move it aside before collecting.") from None
+    if not isinstance(metadata, list):
+        raise RuntimeError("Existing Mapillary metadata must be a JSON list.")
+    seen_ids = {str(r["image_id"]) for r in metadata if isinstance(r, dict) and r.get("image_id")}
+    seen_hashes = []
+    for record in metadata:
+        try:
+            if isinstance(record, dict) and record.get("dhash"):
+                seen_hashes.append(int(record["dhash"], 16))
+        except (TypeError, ValueError):
+            continue
+    candidates = fetch_candidates(token, lat, lng, radius, limit)
     current_size = sum(p.stat().st_size for p in MAPILLARY_DIR.glob("*.jpg"))
     for item in candidates:
         if len(metadata) >= limit or current_size >= MAX_STORAGE_BYTES:
@@ -92,32 +130,36 @@ def download_dataset(limit: int = DATASET_LIMIT, bbox: list[float] | None = None
         image_id = str(item.get("id", ""))
         url = item.get("thumb_1024_url")
         point = item.get("geometry", {}).get("coordinates", [])
-        if not image_id or image_id in seen_ids or not url or len(point) < 2:
+        if not image_id or image_id in seen_ids or not isinstance(url, str) or not url.startswith("https://") or len(point) < 2:
             continue
         try:
-            response = requests.get(url, timeout=30)
+            response = requests.get(url, timeout=REQUEST_TIMEOUT_SECONDS)
             response.raise_for_status()
             raw = response.content
             if current_size + len(raw) > MAX_STORAGE_BYTES:
                 continue
-            image = Image.open(io.BytesIO(raw)).convert("RGB")
+            with Image.open(io.BytesIO(raw)) as source:
+                source.load()
+                image = source.convert("RGB")
             if not quality_ok(image):
                 continue
-            phash = dhash(image)
-            if any((phash ^ old).bit_count() <= 4 for old in seen_hashes):
+            image_hash = dhash(image)
+            if any((image_hash ^ old).bit_count() <= 4 for old in seen_hashes):
                 continue
-            filename = f"{image_id}.jpg"
-            image.save(MAPILLARY_DIR / filename, "JPEG", quality=88, optimize=True)
-            size = (MAPILLARY_DIR / filename).stat().st_size
+            destination = MAPILLARY_DIR / f"{image_id}.jpg"
+            temporary = destination.with_suffix(".jpg.part")
+            image.save(temporary, "JPEG", quality=88, optimize=True)
+            temporary.replace(destination)
+            size = destination.stat().st_size
             current_size += size
-            record = {"image_id": image_id, "filename": filename, "path": str(MAPILLARY_DIR / filename),
-                      "lat": float(point[1]), "lon": float(point[0]), "region": REGION["name"],
-                      "source": "Mapillary", "attribution": "© Mapillary", "captured_at": item.get("captured_at"),
-                      "sequence_id": item.get("sequence"), "compass_angle": item.get("compass_angle"),
-                      "is_pano": item.get("is_pano"), "thumbnail_url": url, "dhash": f"{phash:016x}", "bytes": size}
-            metadata.append(record)
+            metadata.append({"image_id": image_id, "filename": destination.name, "path": str(destination),
+                             "lat": float(point[1]), "lon": float(point[0]), "region": REGION["name"],
+                             "source": "Mapillary", "attribution": "© Mapillary", "captured_at": item.get("captured_at"),
+                             "sequence_id": item.get("sequence"), "compass_angle": item.get("compass_angle"),
+                             "is_pano": item.get("is_pano"), "thumbnail_url": url,
+                             "dhash": f"{image_hash:016x}", "bytes": size})
             seen_ids.add(image_id)
-            seen_hashes.append(phash)
+            seen_hashes.append(image_hash)
             meta_path.write_text(json.dumps(metadata, indent=2), encoding="utf-8")
             time.sleep(API_DELAY)
         except (requests.RequestException, OSError, ValueError):
@@ -129,10 +171,13 @@ def download_dataset(limit: int = DATASET_LIMIT, bbox: list[float] | None = None
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--limit", type=int, default=DATASET_LIMIT)
-    parser.add_argument("--bbox", help="west,south,east,north")
+    parser.add_argument("--lat", type=float, help="search latitude (defaults to REGION configuration)")
+    parser.add_argument("--lng", type=float, help="search longitude (defaults to REGION configuration)")
+    parser.add_argument("--radius", type=int, help="search radius in metres (defaults to REGION configuration)")
     args = parser.parse_args()
-    bbox = [float(v) for v in args.bbox.split(",")] if args.bbox else None
-    records = download_dataset(args.limit, bbox)
+    if (args.lat is None) != (args.lng is None):
+        parser.error("--lat and --lng must be provided together")
+    records = download_dataset(args.limit, args.lat, args.lng, args.radius)
     print(f"Mapillary images available: {len(records)} (metadata: {MAPILLARY_DIR / 'metadata.json'})")
     print("Review image quality and licensing terms before redistribution.")
 
