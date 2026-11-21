@@ -24,18 +24,37 @@ def mapillary_records():
     path = MAPILLARY_DIR / "metadata.json"
     if not path.exists():
         return []
+
     try:
         records = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return []
+
     valid = []
+
     for row in records if isinstance(records, list) else []:
         try:
-            image, lat, lon = Path(row["path"]), float(row["lat"]), float(row["lon"])
-            if row.get("source") == "Mapillary" and image.is_file() and -90 <= lat <= 90 and -180 <= lon <= 180:
+            row = dict(row)
+            image = Path(row.get("path", ""))
+
+            if not image.is_file():
+                image = MAPILLARY_DIR / row["filename"]
+
+            lat = float(row["lat"])
+            lon = float(row["lon"])
+
+            if (
+                row.get("source") == "Mapillary"
+                and image.is_file()
+                and -90 <= lat <= 90
+                and -180 <= lon <= 180
+            ):
+                row["path"] = str(image)
                 valid.append(row)
+
         except (KeyError, TypeError, ValueError):
             continue
+
     return valid
 
 
