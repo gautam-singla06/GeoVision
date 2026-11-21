@@ -104,7 +104,7 @@ class TestStratifiedSplit(unittest.TestCase):
             for i in range(10):
                 meta.append({
                     "region": region, "lat": 0.0, "lon": 0.0,
-                    "filename": f"{region}_{i}.jpg", "path": "",
+                    "filename": f"{region}_{i}.jpg", "path": "", "sequence_id": f"{region}-s{i // 2}",
                 })
         return meta
 
@@ -133,6 +133,13 @@ class TestStratifiedSplit(unittest.TestCase):
         ref_files   = {m["filename"] for m in ref}
         query_files = {m["filename"] for m in query}
         self.assertEqual(ref_files & query_files, set())
+
+    def test_no_sequence_overlap_and_missing_ids_are_reported(self):
+        from evaluate import sequence_aware_split
+        meta = self._make_meta() + [{"region": "A", "filename": "missing", "path": ""}]
+        ref, query, report = sequence_aware_split(meta, held_frac=0.2)
+        self.assertFalse({r["sequence_id"] for r in ref} & {r["sequence_id"] for r in query})
+        self.assertEqual(report["missing_sequence_id_records"], 1)
 
 
 class TestImageEmbeddingShape(unittest.TestCase):
@@ -202,8 +209,9 @@ class TestMapillaryCollection(unittest.TestCase):
 
     def test_limit_enforced_before_api_access(self):
         from download_data import download_dataset
+        from config import MAX_DATASET_IMAGES
         with self.assertRaises(ValueError):
-            download_dataset(101)
+            download_dataset(MAX_DATASET_IMAGES + 1)
 
     def test_download_writes_gps_and_provenance_metadata(self):
         import download_data as collector
@@ -261,10 +269,10 @@ class TestPredictionAndEvaluation(unittest.TestCase):
         self.assertEqual(len(result), 2)
         self.assertEqual(result[0]["rank"], 1)
 
-    def test_split_has_no_overlap_and_singleton_stays_reference(self):
+    def test_split_has_no_overlap_and_single_sequence_stays_reference(self):
         from evaluate import stratified_split
-        rows = [{"region": "A", "filename": f"{i}"} for i in range(4)]
-        rows.append({"region": "B", "filename": "singleton"})
+        rows = [{"region": "A", "filename": f"{i}", "sequence_id": f"a-{i // 2}"} for i in range(4)]
+        rows.append({"region": "B", "filename": "singleton", "sequence_id": "only-b"})
         refs, queries = stratified_split(rows, 0.25)
         self.assertFalse({r["filename"] for r in refs} & {r["filename"] for r in queries})
         self.assertIn("singleton", {r["filename"] for r in refs})

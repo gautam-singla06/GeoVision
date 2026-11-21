@@ -73,6 +73,16 @@ python src\evaluate.py --held-out-frac 0.2
 
 Evaluation splits images before indexing queries, so a query image is never in the reference index. It reports mean and median top-1 geographic error and top-1/top-5 region-label retrieval accuracy, and saves the result to `data/index/evaluation.json`. Top-k accuracy means the query's region label appears among the nearest references; it is not exact-image accuracy. A small one-region collection has limited value for region classification, and even held-out results from the same collection do not establish performance on novel street photos. The command reports an error rather than inventing metrics when there are insufficient held-out examples.
 
+## Research dashboard and experiments
+
+Launch `streamlit run src/app.py` for project overview, dataset audit, preprocessing workflow, feature extraction, model/tuning status, evaluation, and live retrieval. The dashboard admits only local Mapillary records with readable images and valid GPS to the research pipeline. Older non-Mapillary files are retained as audit-only records and are never used to claim street-geolocation results.
+
+`python src/train_models.py` runs CPU-only Decision Tree and Random Forest experiments over ResNet embeddings only after at least 20 Mapillary images from five independent sequence/spatial groups exist. It uses group-aware cross-validation and otherwise reports that no experiment is available. This protects against misleading small-sample or spatial-leakage results.
+
+### Submission-ready project summary
+
+**Problem:** estimate an uploaded street image's location from visually similar GPS-labelled reference imagery. **Method:** image validation and dHash duplicate screening; ImageNet-normalized ResNet-18 embeddings; cosine nearest-neighbour retrieval; group-aware held-out evaluation; optional tree regressors over embeddings. **Architecture:** Mapillary collection → local metadata/images → CPU embedding index → retrieval/evaluation/dashboard. **Limitations:** collection coverage, visual ambiguity, licensing requirements, and small geographically correlated datasets can prevent reliable results. The current project deliberately displays unavailable experiments rather than inventing measurements. Future work includes reviewed multi-region street imagery, spatially separated tests, and calibrated uncertainty.
+
 ## Tests
 
 Run the local unit suite with:

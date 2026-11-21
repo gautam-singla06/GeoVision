@@ -15,7 +15,7 @@ GEOSEARCH_RADIUS = 2500
 REGION = {"name": "Downtown Pittsburgh", "bbox": [-80.025, 40.425, -79.975, 40.455],
           "lat": 40.4406, "lng": -79.9959, "radius": GEOSEARCH_RADIUS}
 DATASET_LIMIT = 20  # validation cap; configurable up to 100 via CLI
-MAX_DATASET_IMAGES = 100
+MAX_DATASET_IMAGES = 500
 MAX_STORAGE_BYTES = 500 * 1024 * 1024
 IMAGE_SIZE = 224
 MODEL_NAME = "ResNet-18 (ImageNet pretrained)"
@@ -25,3 +25,4 @@ API_DELAY = 0.2
 # Backwards-compatible name for existing callers/tests.
 REGIONS = [{"name": "Downtown_Pittsburgh", "lat": REGION["lat"], "lon": REGION["lng"]}]
 NUM_IMAGES_PER_REGION = DATASET_LIMIT
+
