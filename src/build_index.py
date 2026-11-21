@@ -1,123 +1,84 @@
-"""
-build_index.py — Extract CNN embeddings and build a searchable index.
-
-Usage:
-    python src/build_index.py
-
-Run this AFTER download_data.py has populated data/raw/.
-It will produce two files in data/index/:
-    embeddings.npy   — (N, 512) float32 embedding matrix
-    metadata.json    — list of N dicts with filename / lat / lon / region
-"""
-
-import sys
+"""Create a CPU ResNet-18 cosine index from Mapillary reference images."""
 import json
-import numpy as np
+import sys
 from pathlib import Path
+
+import numpy as np
 from PIL import Image
 from tqdm import tqdm
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from config import RAW_DIR, INDEX_DIR, MODEL_NAME, EMBEDDING_DIM
+from config import EMBEDDING_DIM, INDEX_DIR, MAPILLARY_DIR, MODEL_NAME, PROCESSED_DIR
 
-# ---------------------------------------------------------------------------
-# Lazy torch import so the script gives a clean error if torch is missing
-# ---------------------------------------------------------------------------
-def _load_model():
+
+def load_metadata():
+    path = MAPILLARY_DIR / "metadata.json"
+    if not path.exists():
+        raise FileNotFoundError("No Mapillary metadata found. Run python src/download_data.py first.")
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def load_model():
     import torch
-    import torchvision.models as models
-    import torchvision.transforms as T
-
-    # Load pretrained ResNet-18 (downloads weights ~45 MB on first run)
-    weights_enum = models.ResNet18_Weights.DEFAULT
-    model = models.resnet18(weights=weights_enum)
-
-    # Remove the final classification head → keep feature extractor only
-    model = torch.nn.Sequential(*list(model.children())[:-1])
+    from torchvision.models import ResNet18_Weights, resnet18
+    weights = ResNet18_Weights.DEFAULT
+    model = resnet18(weights=weights)
+    model.fc = torch.nn.Identity()
     model.eval()
-
-    # Standard ImageNet normalisation
-    transform = T.Compose([
-        T.Resize((224, 224)),
-        T.ToTensor(),
-        T.Normalize(mean=[0.485, 0.456, 0.406],
-                    std=[0.229, 0.224, 0.225]),
-    ])
+    transform = weights.transforms()
     return model, transform, torch
 
 
 def extract_embedding(model, transform, torch, img_path: Path) -> np.ndarray | None:
-    """Return a 1-D normalised L2 embedding for one image file, or None on error."""
     try:
-        img = Image.open(img_path).convert("RGB")
-        tensor = transform(img).unsqueeze(0)   # (1, 3, 224, 224)
-        with torch.no_grad():
-            feat = model(tensor)               # (1, 512, 1, 1)
-        vec = feat.squeeze().numpy()           # (512,)
-        norm = np.linalg.norm(vec)
-        if norm < 1e-8:
-            return None
-        return (vec / norm).astype(np.float32)
-    except Exception:
+        with Image.open(img_path) as im:
+            tensor = transform(im.convert("RGB")).unsqueeze(0)
+        with torch.inference_mode():
+            vector = model(tensor).squeeze(0).cpu().numpy()
+        norm = np.linalg.norm(vector)
+        return (vector / norm).astype(np.float32) if norm > 1e-8 else None
+    except (OSError, ValueError, RuntimeError):
         return None
 
 
-def main() -> None:
-    # ---- collect all metadata records ----
-    combined_meta_path = RAW_DIR / "all_metadata.json"
-    if not combined_meta_path.exists():
-        # Fall back to per-region files
-        all_meta: list[dict] = []
-        for region_dir in sorted(RAW_DIR.iterdir()):
-            mp = region_dir / "metadata.json"
-            if mp.exists():
-                with open(mp, encoding="utf-8") as f:
-                    all_meta.extend(json.load(f))
-    else:
-        with open(combined_meta_path, encoding="utf-8") as f:
-            all_meta = json.load(f)
-
-    if not all_meta:
-        print("[ERROR] No images found in data/raw/. Run download_data.py first.")
-        sys.exit(1)
-
-    print(f"Found {len(all_meta)} images. Loading model …")
-    model, transform, torch = _load_model()
-    print(f"Model: {MODEL_NAME}  (CPU, no GPU needed)")
-
+def build_index(records=None):
+    records = load_metadata() if records is None else records
+    valid = [r for r in records if Path(r["path"]).is_file()]
+    if not valid:
+        raise ValueError("No readable Mapillary images found; collect images first.")
+    model, transform, torch = load_model()
     INDEX_DIR.mkdir(parents=True, exist_ok=True)
-
-    embeddings: list[np.ndarray] = []
-    kept_meta:  list[dict]       = []
-
-    for record in tqdm(all_meta, desc="Extracting features"):
-        img_path = Path(record["path"])
-        if not img_path.exists():
+    PROCESSED_DIR.mkdir(parents=True, exist_ok=True)
+    embeddings, kept = [], []
+    for record in tqdm(valid, desc="Embedding reference images"):
+        processed_dir = PROCESSED_DIR / "mapillary"
+        processed_dir.mkdir(parents=True, exist_ok=True)
+        processed_path = processed_dir / f"{record.get('image_id', Path(record['path']).stem)}.jpg"
+        try:
+            with Image.open(record["path"]) as im:
+                im.convert("RGB").resize((224, 224), Image.Resampling.LANCZOS).save(processed_path, "JPEG", quality=88)
+        except OSError:
             continue
-        vec = extract_embedding(model, transform, torch, img_path)
-        if vec is not None:
-            embeddings.append(vec)
-            kept_meta.append(record)
-
+        vector = extract_embedding(model, transform, torch, processed_path)
+        if vector is not None:
+            embeddings.append(vector)
+            kept.append({**record, "raw_path": record["path"], "path": str(processed_path)})
     if not embeddings:
-        print("[ERROR] No embeddings produced. Check that images exist in data/raw/.")
-        sys.exit(1)
-
-    emb_matrix = np.stack(embeddings, axis=0)  # (N, 512)
-
-    # ---- save ----
-    emb_path  = INDEX_DIR / "embeddings.npy"
-    meta_path = INDEX_DIR / "metadata.json"
-
-    np.save(str(emb_path), emb_matrix)
-    with open(meta_path, "w", encoding="utf-8") as f:
-        json.dump(kept_meta, f, indent=2, ensure_ascii=False)
-
-    print(f"\n✓  Index built:  {emb_matrix.shape[0]} images  ×  {emb_matrix.shape[1]} dims")
-    print(f"   Embeddings  → {emb_path}")
-    print(f"   Metadata    → {meta_path}")
+        raise ValueError("No embeddings could be produced from the available images.")
+    matrix = np.stack(embeddings)
+    if matrix.shape[1] != EMBEDDING_DIM:
+        raise ValueError(f"Unexpected embedding dimension: {matrix.shape[1]}")
+    np.save(INDEX_DIR / "embeddings.npy", matrix)
+    (INDEX_DIR / "metadata.json").write_text(json.dumps(kept, indent=2), encoding="utf-8")
+    stats = {"image_count": len(kept), "embedding_dim": int(matrix.shape[1]), "model": MODEL_NAME,
+             "regions": sorted({r["region"] for r in kept}), "source": "Mapillary"}
+    (INDEX_DIR / "stats.json").write_text(json.dumps(stats, indent=2), encoding="utf-8")
+    return stats
 
 
 if __name__ == "__main__":
-    main()
-
+    try:
+        print(json.dumps(build_index(), indent=2))
+    except (FileNotFoundError, ValueError, RuntimeError) as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        sys.exit(1)

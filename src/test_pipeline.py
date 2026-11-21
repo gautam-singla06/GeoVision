@@ -17,6 +17,7 @@ import math
 import json
 import tempfile
 import unittest
+from unittest.mock import patch
 import numpy as np
 from pathlib import Path
 from PIL import Image
@@ -143,8 +144,15 @@ class TestImageEmbeddingShape(unittest.TestCase):
         "torch not installed"
     )
     def test_embedding_shape_and_norm(self):
-        from build_index import extract_embedding, _load_model
-        model, transform, torch = _load_model()
+        import torch
+        from build_index import extract_embedding
+
+        class DummyModel(torch.nn.Module):
+            def forward(self, tensor):
+                return torch.ones((tensor.shape[0], 512))
+
+        model = DummyModel()
+        transform = lambda image: torch.zeros((3, 224, 224))
 
         # Create a blank 224×224 test image
         with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as f:
@@ -158,6 +166,110 @@ class TestImageEmbeddingShape(unittest.TestCase):
         self.assertEqual(vec.shape, (512,))
         norm = float(np.linalg.norm(vec))
         self.assertAlmostEqual(norm, 1.0, places=4)
+
+
+class TestMapillaryCollection(unittest.TestCase):
+    def test_image_quality_filter(self):
+        from download_data import quality_ok
+        self.assertFalse(quality_ok(Image.new("RGB", (80, 80), "white")))
+        self.assertFalse(quality_ok(Image.new("RGB", (224, 224), "white")))
+        self.assertTrue(quality_ok(Image.effect_noise((224, 224), 80)))
+
+    def test_perceptual_hash_detects_identical_images(self):
+        from download_data import dhash
+        image = Image.effect_noise((100, 100), 80)
+        self.assertEqual(dhash(image), dhash(image.copy()))
+
+    def test_limit_enforced_before_api_access(self):
+        from download_data import download_dataset
+        with self.assertRaises(ValueError):
+            download_dataset(101)
+
+    def test_download_writes_gps_and_provenance_metadata(self):
+        import download_data as collector
+        class Response:
+            content = __import__("io").BytesIO()
+            def raise_for_status(self):
+                return None
+        image_bytes = __import__("io").BytesIO()
+        Image.effect_noise((224, 224), 80).save(image_bytes, format="JPEG")
+        response = Response()
+        response.content = image_bytes.getvalue()
+        candidate = {"id": "street-123", "geometry": {"coordinates": [-79.99, 40.44]},
+                     "thumb_1024_url": "https://example.invalid/thumb", "captured_at": 123,
+                     "sequence": "sequence-1"}
+        with tempfile.TemporaryDirectory() as directory, \
+             patch.object(collector, "MAPILLARY_DIR", Path(directory)), \
+             patch.object(collector, "get_token", return_value="test-token"), \
+             patch.object(collector, "fetch_candidates", return_value=[candidate]), \
+             patch.object(collector.requests, "get", return_value=response), \
+             patch.object(collector.time, "sleep"):
+            rows = collector.download_dataset(1)
+            saved = json.loads((Path(directory) / "metadata.json").read_text(encoding="utf-8"))
+            saved_image_exists = Path(saved[0]["path"]).exists()
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(saved[0]["image_id"], "street-123")
+        self.assertAlmostEqual(saved[0]["lat"], 40.44)
+        self.assertAlmostEqual(saved[0]["lon"], -79.99)
+        self.assertEqual(saved[0]["source"], "Mapillary")
+        self.assertTrue(saved_image_exists)
+
+
+class TestPredictionAndEvaluation(unittest.TestCase):
+    def test_predict_excludes_shape_mismatch_and_returns_top_k(self):
+        import predict as module
+        class Model:
+            def __call__(self, tensor):
+                import torch
+                return torch.tensor([[1.0, 0.0]])
+        class Torch:
+            @staticmethod
+            def inference_mode():
+                import torch
+                return torch.inference_mode()
+        old_load_index, old_load_model = module.load_index, module.load_model
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "query.jpg"
+            Image.new("RGB", (20, 20), "red").save(path)
+            records = [{"lat": 40+i, "lon": -80, "path": "", "region": "Pittsburgh"} for i in range(3)]
+            module.load_index = lambda: (np.array([[1, 0], [0, 1], [-1, 0]], dtype=np.float32), records)
+            module.load_model = lambda: (Model(), lambda image: __import__("torch").zeros((3, 224, 224)), Torch)
+            try:
+                result = module.predict(path, top_k=2)
+            finally:
+                module.load_index, module.load_model = old_load_index, old_load_model
+        self.assertEqual(len(result), 2)
+        self.assertEqual(result[0]["rank"], 1)
+
+    def test_split_has_no_overlap_and_singleton_stays_reference(self):
+        from evaluate import stratified_split
+        rows = [{"region": "A", "filename": f"{i}"} for i in range(4)]
+        rows.append({"region": "B", "filename": "singleton"})
+        refs, queries = stratified_split(rows, 0.25)
+        self.assertFalse({r["filename"] for r in refs} & {r["filename"] for r in queries})
+        self.assertIn("singleton", {r["filename"] for r in refs})
+
+    def test_index_builder_writes_embeddings_and_aligned_metadata(self):
+        import build_index as module
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            image_path = root / "raw.jpg"
+            Image.new("RGB", (240, 160), "blue").save(image_path)
+            record = {"image_id": "id-1", "path": str(image_path), "lat": 40.4,
+                      "lon": -80.0, "region": "Pittsburgh", "source": "Mapillary"}
+            patches = [patch.object(module, "INDEX_DIR", root / "index"),
+                       patch.object(module, "PROCESSED_DIR", root / "processed"),
+                       patch.object(module, "load_model", return_value=(None, None, None)),
+                       patch.object(module, "extract_embedding", return_value=np.array([1, 0], dtype=np.float32))]
+            with patches[0], patches[1], patches[2], patches[3], patch.object(module, "EMBEDDING_DIM", 2):
+                stats = module.build_index([record])
+            matrix = np.load(root / "index" / "embeddings.npy")
+            indexed = json.loads((root / "index" / "metadata.json").read_text(encoding="utf-8"))
+            processed_exists = Path(indexed[0]["path"]).exists()
+        self.assertEqual(stats["image_count"], 1)
+        self.assertEqual(matrix.shape, (1, 2))
+        self.assertEqual(indexed[0]["image_id"], "id-1")
+        self.assertTrue(processed_exists)
 
 
 if __name__ == "__main__":

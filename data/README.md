@@ -8,4 +8,3 @@ This folder stores downloaded images and dataset files.
 Subfolders will be created here in later stages, for example:
 - `raw/` — original downloaded images
 - `processed/` — resized or cleaned images ready for training
-
