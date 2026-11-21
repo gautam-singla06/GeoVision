@@ -87,11 +87,4 @@ data/raw/
 data/index/
 data/tmp/
 .env
-.venv/
-__pycache__/
-*.pyc
-data/raw/
-data/index/
-data/tmp/
-.env
 *.bak

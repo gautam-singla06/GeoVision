@@ -24,7 +24,7 @@ PAGES = {
     "01 · Project Overview": "Overview", "02 · Dataset Collection": "Dataset Collection",
     "03 · Dataset Exploration": "Dataset Explorer", "04 · Cleaning & Preprocessing": "Preprocessing",
     "05 · Feature Extraction": "Feature Extraction", "06 · Model Architecture": "Architecture",
-    "07 · Model Training": "Model Training", "08 · Decision Tree": "Decision Tree",
+    "07 · Model Training": "Model Training", "Live Prediction": "Live Prediction", "08 · Decision Tree": "Decision Tree",
     "09 · Random Forest": "Random Forest", "10 · Hyperparameter Tuning": "Tuning",
     "11 · Model Comparison": "Model Comparison", "12 · Evaluation Metrics": "Evaluation",
     "13 · Error Analysis": "Error Analysis", "14 · Actual vs Predicted GPS": "Actual vs Predicted",
@@ -245,37 +245,59 @@ elif page == "Evaluation":
 elif page == "Live Prediction":
     heading("IMAGE RETRIEVAL", "Live prediction", "Upload a street-level image to retrieve its closest visual references.")
     ready=bool(records) and (INDEX_DIR/"embeddings.npy").exists() and (INDEX_DIR/"metadata.json").exists()
-    uploaded=st.file_uploader("Choose a street image",type=["jpg","jpeg","png","webp"],label_visibility="collapsed")
+    uploaded=st.file_uploader("Choose a JPG or PNG street image",type=["jpg","jpeg","png"],label_visibility="collapsed")
     if not ready: st.warning("Prediction index is unavailable for the verified Mapillary reference corpus.")
-    if uploaded and ready:
+    predict_clicked=st.button("Predict Location",disabled=not uploaded or not ready)
+    if uploaded and predict_clicked:
         try:
             image=Image.open(uploaded).convert("RGB")
-            l,r=st.columns([.9,1.1]); l.image(image,caption="Uploaded image",use_container_width=True)
-            with tempfile.NamedTemporaryFile(suffix=".jpg",delete=False) as f: image.save(f,"JPEG"); query_path=f.name
+            left,right=st.columns([.9,1.1]); left.image(image,caption="Uploaded image",use_container_width=True)
+            with tempfile.NamedTemporaryFile(suffix=".jpg",delete=False) as f:
+                image.save(f,"JPEG"); query_path=f.name
             try:
-                with st.spinner("Extracting features and ranking references…"): matches=predict(query_path,top_k=5)
-            finally: Path(query_path).unlink(missing_ok=True)
-            best=matches[0]
-            with r:
-                st.markdown("<div class='eyebrow'>RETRIEVED LOCATION</div>",unsafe_allow_html=True)
-                metric_row([("Latitude",f"{best['lat']:.5f}°","Coordinate copied from the closest reference"),("Longitude",f"{best['lon']:.5f}°","Coordinate copied from the closest reference")])
-                if px is not None:
-                    match_frame=pd.DataFrame(matches)
-                    center={"lat":float(match_frame.lat.mean()),"lon":float(match_frame.lon.mean())}
-                    match_map=px.scatter_map(match_frame,lat="lat",lon="lon",color="rank",size_max=8,hover_name="image_id",hover_data=["similarity","region"],zoom=14,center=center,map_style="carto-darkmatter" if DARK_MODE else "carto-positron",title="Top retrieved reference GPS",color_continuous_scale=[[0,PLOT["accent"]],[1,PLOT["blue"]]])
-                    match_map.update_traces(marker=dict(size=5,opacity=.82))
-                    match_map.update_layout(map=dict(zoom=14,center=center),margin=dict(l=0,r=0,t=48,b=0),height=300,font=dict(color=PLOT["text"]),paper_bgcolor=PLOT["paper"],plot_bgcolor=PLOT["surface"],title=dict(font=dict(color=PLOT["title"],size=16)),coloraxis_colorbar=dict(title=dict(text="Match rank",font=dict(color=PLOT["text"])),tickfont=dict(color=PLOT["text"])))
-                    st.plotly_chart(match_map,use_container_width=True)
-                st.caption("Similarity ranks visual resemblance. It is not a probability or confidence estimate.")
-            st.subheader("Top reference matches")
-            cols=st.columns(len(matches))
-            for col,m in zip(cols,matches):
-                with col:
-                    p=Path(m["ref_path"])
-                    if p.is_file(): st.image(str(p),use_container_width=True)
-                    st.markdown(f"**Match {m['rank']}** · {m['similarity']:.3f}")
-                    st.caption(f"{m['lat']:.5f}, {m['lon']:.5f}\n\n{m.get('image_id','')} · © Mapillary")
-        except (OSError,ValueError,RuntimeError,FileNotFoundError): st.error("Image prediction could not be completed. Check that the uploaded file is readable and the local index is current.")
+                with st.spinner("Extracting features and ranking references..."):
+                    matches=predict(query_path,top_k=5)
+            finally:
+                Path(query_path).unlink(missing_ok=True)
+            if not matches:
+                st.warning("The reference index returned no matches.")
+            else:
+                best=matches[0]
+                def valid_coords(row):
+                    try:
+                        lat,lon=float(row.get("lat")),float(row.get("lon"))
+                        return math.isfinite(lat) and math.isfinite(lon) and -90<=lat<=90 and -180<=lon<=180
+                    except (TypeError,ValueError):
+                        return False
+                valid_matches=[match for match in matches if valid_coords(match)]
+                with right:
+                    st.markdown("<div class='eyebrow'>RETRIEVED LOCATION</div>",unsafe_allow_html=True)
+                    st.metric("Predicted location",best.get("region") or "Mapillary reference")
+                    if valid_coords(best):
+                        metric_row([("Latitude",f"{best['lat']:.5f} deg","Coordinate copied from the closest reference"),("Longitude",f"{best['lon']:.5f} deg","Coordinate copied from the closest reference")])
+                    else:
+                        st.info("The top match has no valid GPS coordinates.")
+                    if px is not None and valid_matches:
+                        match_frame=pd.DataFrame(valid_matches)
+                        center={"lat":float(match_frame.lat.mean()),"lon":float(match_frame.lon.mean())}
+                        match_map=px.scatter_map(match_frame,lat="lat",lon="lon",color="rank",hover_name="image_id",hover_data=["similarity","region"],zoom=14,center=center,map_style="carto-darkmatter" if DARK_MODE else "carto-positron",title="Top retrieved reference GPS",color_continuous_scale=[[0,PLOT["accent"]],[1,PLOT["blue"]]])
+                        match_map.update_traces(marker=dict(size=5,opacity=.82))
+                        match_map.update_layout(map=dict(zoom=14,center=center),margin=dict(l=0,r=0,t=48,b=0),height=300,font=dict(color=PLOT["text"]),paper_bgcolor=PLOT["paper"],plot_bgcolor=PLOT["surface"],title=dict(font=dict(color=PLOT["title"],size=16)))
+                        st.plotly_chart(match_map,use_container_width=True)
+                    elif not valid_matches:
+                        st.info("A map is unavailable because none of the returned matches has valid GPS coordinates.")
+                    st.caption("Similarity ranks visual resemblance. It is not a probability or confidence estimate.")
+                st.subheader("Top reference matches")
+                cols=st.columns(len(matches))
+                for col,match in zip(cols,matches):
+                    with col:
+                        ref_path=Path(match["ref_path"])
+                        if ref_path.is_file(): st.image(str(ref_path),use_container_width=True)
+                        st.markdown(f"**Match {match['rank']}** - {match['similarity']:.3f}")
+                        coords=f"{match['lat']:.5f}, {match['lon']:.5f}" if valid_coords(match) else "GPS unavailable"
+                        st.caption(f"{coords}\n\n{match.get('image_id','')} - {match.get('attribution','Mapillary')}")
+        except (OSError,ValueError,RuntimeError,FileNotFoundError,IndexError):
+            st.error("Image prediction could not be completed. Check that the uploaded file is readable and the local index is current.")
 elif page == "Actual vs Predicted":
     heading("GEOGRAPHIC COMPARISON", "Actual vs predicted", "Held-out sequence GPS compared with the nearest-reference prediction.")
     model_view=st.selectbox("Experiment",["ResNet-18 nearest-reference","Decision Tree regression","Random Forest regression"])
