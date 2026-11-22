@@ -1,0 +1,80 @@
+{
+  "provenance": {
+    "notebook": "GeoVision_Training.ipynb",
+    "source": "Executed notebook cells and displayed outputs supplied by the user",
+    "dataset_images": 454,
+    "regions": ["Downtown Pittsburgh"],
+    "feature_extractor": "ImageNet pretrained ResNet-18, 512-dimensional embeddings",
+    "split": {
+      "method": "GroupShuffleSplit by sequence_id",
+      "test_fraction": 0.25,
+      "random_state": 42,
+      "training_images": 286,
+      "testing_images": 168
+    },
+    "hyperparameter_search": {
+      "model": "MultiOutputRegressor(RandomForestRegressor)",
+      "cv": "GroupKFold, 3 folds, grouped by sequence_id on training split",
+      "candidate_combinations": 12,
+      "total_fits": 36,
+      "parameters": {
+        "n_estimators": [100, 200],
+        "max_depth": [10, 20, null],
+        "min_samples_split": [2, 5]
+      },
+      "best_parameters": {
+        "n_estimators": 100,
+        "max_depth": null,
+        "min_samples_split": 5,
+        "random_state": 42,
+        "n_jobs": -1
+      },
+      "best_cv_gps_error_m": 221.6010667053139
+    },
+    "unavailable": [
+      "Decision Tree fitted model artifact",
+      "Decision Tree per-query regression predictions",
+      "Persisted training progress logs",
+      "Train/test sequence counts"
+    ]
+  },
+  "experiments": [
+    {
+      "name": "Decision Tree",
+      "estimator": "MultiOutputRegressor(DecisionTreeRegressor)",
+      "parameters": {"max_depth": 10, "min_samples_split": 4, "random_state": 42},
+      "gps_mean_error_m": 261.252,
+      "gps_median_error_m": 255.523,
+      "gps_rmse_m": 295.58,
+      "within_100m_percent": 12.5,
+      "within_250m_percent": 47.62,
+      "within_500m_percent": 94.64,
+      "within_1000m_percent": 100.0
+    },
+    {
+      "name": "Random Forest baseline",
+      "estimator": "MultiOutputRegressor(RandomForestRegressor)",
+      "parameters": {"n_estimators": 200, "max_depth": 15, "random_state": 42, "n_jobs": -1},
+      "gps_mean_error_m": 199.979,
+      "gps_median_error_m": 197.368,
+      "gps_rmse_m": 227.63,
+      "within_100m_percent": 22.62,
+      "within_250m_percent": 61.9,
+      "within_500m_percent": 100.0,
+      "within_1000m_percent": 100.0
+    },
+    {
+      "name": "Tuned Random Forest",
+      "estimator": "MultiOutputRegressor(RandomForestRegressor)",
+      "parameters": {"n_estimators": 100, "max_depth": null, "min_samples_split": 5, "random_state": 42, "n_jobs": -1},
+      "gps_mean_error_m": 199.53,
+      "gps_median_error_m": 196.41,
+      "gps_rmse_m": 227.42,
+      "within_100m_percent": 22.02,
+      "within_250m_percent": 64.88,
+      "within_500m_percent": 100.0,
+      "within_1000m_percent": 100.0,
+      "max_error_m": 420.55
+    }
+  ]
+}

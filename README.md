@@ -1,82 +1,102 @@
 # GeoVision
 
-GeoVision is a small image-retrieval prototype for street-image geolocation. It embeds an uploaded image with pretrained ResNet-18, finds visually similar geotagged reference images, and returns the coordinates of the best match. It is not a GPS estimator or a production geolocation system.
+GeoVision is a lightweight, CPU-only image retrieval prototype for estimating where an outdoor street image may have been taken. It embeds images with pretrained ResNet-18, ranks GPS-labelled Mapillary reference thumbnails by cosine similarity, and reports the coordinate of the nearest reference. It is a retrieval baseline, not a trained geolocation model.
 
-## Current status
+## Problem and architecture
 
-Implemented:
+```text
+Mapillary Graph API → raw thumbnails + GPS/provenance JSON → processed 224×224 images
+                                                        ↓
+                         ResNet-18 embeddings → NumPy cosine index
+                                                        ↓
+                         Streamlit upload → top-5 matches + map
+```
 
-- Wikimedia Commons acquisition with per-image provenance and licence fields.
-- Coordinate validation, 224×224 preprocessing, ResNet-18 embeddings, NumPy cosine-similarity index, CLI prediction, Streamlit UI, and held-out retrieval evaluation.
-- Smoke tests for configuration, distance/similarity math, splitting, and (when PyTorch is installed) embedding shape.
+The default collection region is downtown Pittsburgh, Pennsylvania. Collection is an explicit command, capped at 20 images by default; the CLI allows a maximum of 100 and the downloader enforces a 500 MB storage ceiling. The pipeline has separate `data/raw/mapillary`, `data/processed/mapillary`, and `data/index` outputs. Downloads resume using image IDs in metadata. The existing unrelated files under `data/raw/` are not used by this Mapillary pipeline.
 
-Not yet completed in this checkout:
+## Technology
 
-- No reference images, `data/raw/all_metadata.json`, or `data/index/` files are present, so the UI and prediction command cannot return a result yet.
-- The pipeline could not be executed here because Windows has only the Microsoft Store `python` alias and no installed Python interpreter. Consequently, no dataset download, model-weight download, tests, index, or predictions were claimed as completed.
-- The supplied images have not been inspected yet. Wikimedia geosearch returns geographically tagged Commons files, but they can include landmarks, indoor photos, artwork, or other non-street imagery; this is not a curated street-view dataset.
+Python 3.12, PyTorch CPU, torchvision ResNet-18 ImageNet weights, Pillow, NumPy, Requests, python-dotenv, and Streamlit. Embeddings are L2-normalized and searched with a matrix-vector cosine product, which is suitable for this small index and avoids an additional vector database.
 
-## Windows setup
+## Data source, permissions, and quality
 
-1. Install Python 3.12 from [python.org](https://www.python.org/downloads/) and select **Add python.exe to PATH**. Close and reopen PowerShell, then verify:
+Images and coordinates come from the authenticated [Mapillary Graph API](https://www.mapillary.com/developer/api-documentation). The collector stores image ID, GPS, capture time when available, sequence ID, thumbnail URL, and Mapillary attribution. Consult the [Mapillary terms](https://www.mapillary.com/terms) and API documentation for current access, attribution, and reuse requirements. API access does not grant rights beyond those terms; retain attribution and review applicable image rights before redistribution.
 
-   ```powershell
-   python --version
-   # Python 3.12.x
-   ```
+The API query returns public geotagged imagery, not a curated guarantee of street scenes. The collector rejects very small, nearly uniform, exact/near-duplicate images, but cannot reliably detect portraits, indoor scenes, unrelated objects, or every unusable image. Inspect the small validation set before treating it as a reference dataset. The saved thumbnail URLs are API-provided URLs and are fetched only when the user runs the collection command.
 
-2. From the project directory, create and activate an environment:
+## Setup
 
-   ```powershell
-   python -m venv .venv
-   .\.venv\Scripts\Activate.ps1
-   ```
-
-   If PowerShell blocks activation, run `Set-ExecutionPolicy -Scope Process Bypass` for that shell and activate again.
-
-3. Install the CPU build of PyTorch, then the remaining dependencies:
-
-   ```powershell
-   pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
-   pip install -r requirements.txt
-   ```
-
-## Run the small reproducible prototype
-
-The default in `src/config.py` is **3 images per region** across eight regions (at most 24 thumbnails). It is deliberately small; change `NUM_IMAGES_PER_REGION` only after the baseline works.
+Install Python 3.12, then from the project root:
 
 ```powershell
-python src\test_pipeline.py
-python src\download_data.py
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
+pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+pip install -r requirements.txt
+```
+
+Copy `.env.example` to `.env` and set `MAPILLARY_CLIENT_TOKEN` to your Mapillary client token. `.env` is ignored by Git. The token is read locally and is not printed by the downloader. Missing credentials produce a clear error. Do not commit credentials or the downloaded dataset.
+
+## Collect data
+
+Collection is opt-in and starts with at most 20 images:
+
+```powershell
+python src\download_data.py --limit 20
+```
+
+After reviewing the validation imagery, a collection can be expanded up to 100 images:
+
+```powershell
+python src\download_data.py --limit 100
+```
+
+The default search coordinates and radius come from `REGION` in `src/config.py`. To override them, pass `--lat`, `--lng`, and optionally `--radius` (metres), for example `python src/download_data.py --lat 40.4406 --lng -79.9959 --radius 2500`. Resume by repeating the same command; previously saved IDs are skipped. Collection may return fewer images if the API provides too few candidates or filters reject them. No data is collected just by starting the app.
+
+## Build index and run
+
+The first index build may download the official torchvision ResNet-18 weights (about 45 MB); no image dataset is downloaded by this step.
+
+```powershell
 python src\build_index.py
-python src\evaluate.py
 streamlit run src\app.py
 ```
 
-For a command-line query:
+The UI shows the best-match coordinates on a map and up to five matches with similarity values. A similarity score measures visual embedding similarity only; it is not a probability or accuracy estimate. The predicted coordinate is copied from the closest reference GPS point. When ground truth is available programmatically, `predict(..., ground_truth=(lat, lon))` adds its great-circle distance.
+
+## Evaluation
 
 ```powershell
-python src\predict.py path\to\photo.jpg
+python src\evaluate.py --held-out-frac 0.2
 ```
 
-The first index build fetches the official pretrained ResNet-18 weights through torchvision (about 45 MB). No API token or payment is required for the Wikimedia download. The downloader saves each image's source page title, thumbnail URL, coordinates, and `LicenseShortName` in `data/raw/<region>/metadata.json`; `all_metadata.json` is the combined GPS metadata. Retain this provenance when sharing the data.
+Evaluation splits images before indexing queries, so a query image is never in the reference index. It reports mean and median top-1 geographic error and top-1/top-5 region-label retrieval accuracy, and saves the result to `data/index/evaluation.json`. Top-k accuracy means the query's region label appears among the nearest references; it is not exact-image accuracy. A small one-region collection has limited value for region classification, and even held-out results from the same collection do not establish performance on novel street photos. The command reports an error rather than inventing metrics when there are insufficient held-out examples.
 
-## Dataset and attribution
+## Research dashboard and experiments
 
-Reference images are queried from the [Wikimedia Commons API](https://commons.wikimedia.org/w/api.php) using geosearch around Paris, London, New York, Tokyo, Sydney, Cairo, Rio de Janeiro, and Mumbai. The API requires no credentials. Each accepted item must have both latitude and longitude; files without either coordinate are skipped. The exact licence is recorded per file because Commons licences vary (commonly Creative Commons, but not guaranteed to be a single licence). Use the saved metadata and the original Commons file page to meet the licence and attribution terms for every downloaded image.
+Launch `streamlit run src/app.py` for project overview, dataset audit, preprocessing workflow, feature extraction, model/tuning status, evaluation, and live retrieval. The dashboard admits only local Mapillary records with readable images and valid GPS to the research pipeline. Older non-Mapillary files are retained as audit-only records and are never used to claim street-geolocation results.
 
-## Limitations
+`python src/train_models.py` runs CPU-only Decision Tree and Random Forest experiments over ResNet embeddings only after at least 20 Mapillary images from five independent sequence/spatial groups exist. It uses group-aware cross-validation and otherwise reports that no experiment is available. This protects against misleading small-sample or spatial-leakage results.
 
-- Similarity is not geographic accuracy. A high score only means that a query resembles a reference image.
-- The tiny sample and eight city regions are suitable only for an end-to-end demonstration.
-- The evaluation holds out images from the same Wikimedia collection, so it does not measure performance on independent real-world street photos.
-- This retrieval baseline does not train or fine-tune a geolocation model.
+### Submission-ready project summary
 
-## Project files
+**Problem:** estimate an uploaded street image's location from visually similar GPS-labelled reference imagery. **Method:** image validation and dHash duplicate screening; ImageNet-normalized ResNet-18 embeddings; cosine nearest-neighbour retrieval; group-aware held-out evaluation; optional tree regressors over embeddings. **Architecture:** Mapillary collection → local metadata/images → CPU embedding index → retrieval/evaluation/dashboard. **Limitations:** collection coverage, visual ambiguity, licensing requirements, and small geographically correlated datasets can prevent reliable results. The current project deliberately displays unavailable experiments rather than inventing measurements. Future work includes reviewed multi-region street imagery, spatially separated tests, and calibrated uncertainty.
 
-- `src/download_data.py` — token-free Commons downloader and provenance writer.
-- `src/build_index.py` — ResNet-18 embedding extraction and index creation.
-- `src/predict.py` — nearest-neighbour prediction.
-- `src/evaluate.py` — same-source held-out evaluation.
-- `src/app.py` — Streamlit interface.
-- `src/test_pipeline.py` — smoke tests.
+## Tests
+
+Run the local unit suite with:
+
+```powershell
+python src\test_pipeline.py
+```
+
+Tests are designed to run without downloading Mapillary images or pretrained weights.
+
+## Limitations and next steps
+
+- ResNet-18 image similarity is a weak geographic signal and is not fine-tuned for geolocation.
+- Downtown Pittsburgh imagery can be sparse; map coverage and visual quality depend on Mapillary availability.
+- Automatic quality checks cannot fully filter scene categories; manual review is needed.
+- Similarity is not calibrated confidence. The best match can be geographically wrong.
+- Improve the baseline with reviewed street-only data, spatially separated evaluation, richer geospatial retrieval, and a calibrated confidence model.

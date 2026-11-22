@@ -1,0 +1,9 @@
+{
+  "image_count": 454,
+  "embedding_dim": 512,
+  "model": "ResNet-18 (ImageNet pretrained)",
+  "regions": [
+    "Downtown Pittsburgh"
+  ],
+  "source": "Mapillary"
+}

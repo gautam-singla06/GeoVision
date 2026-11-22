@@ -1,0 +1,15 @@
+{
+    "model": "Tuned Random Forest",
+    "best_parameters": {
+        "estimator__max_depth": null,
+        "estimator__min_samples_split": 5,
+        "estimator__n_estimators": 100
+    },
+    "mean_error_m": 199.53,
+    "median_error_m": 196.41,
+    "maximum_error_m": 420.55,
+    "within_100m_percent": 22.02,
+    "within_250m_percent": 64.88,
+    "within_500m_percent": 100.0,
+    "within_1km_percent": 100.0
+}
